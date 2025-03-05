@@ -1,182 +1,215 @@
-use std::process::{Command, Stdio};
-use std::io::{self, Read, BufRead, BufReader};
-use clap::Parser;
+use std::process::Command;
 
-#[derive(Parser)]
-#[command(version, about = "Like ping, but with ASCII art")]
+use clap::Parser;
+use dns_lookup::lookup_host;
+use anyhow::{Context, Result, anyhow};
+
 #[cfg(target_os = "linux")]
+#[derive(Parser, Debug)]
+#[clap(author, version, about)]
 struct Args {
-    /// The target host to ping
-    host: String,
+    /// Target host to ping
+    destination: String,
 
     /// Number of packets to send
-    #[arg(short = 'c', long = "count")]
-    count: Option<String>,
+    #[clap(short = 'c', long = "count")]
+    count: Option<u16>,
 
-    /// Interval between sending packets in seconds
-    #[arg(short = 'i', long = "interval")]
-    interval: Option<String>,
-    
-    /// Wait timeout in seconds
-    #[arg(short = 'W', long = "timeout")]
-    timeout: Option<String>,
-    
-    /// Size of the packet to send in bytes
-    #[arg(short = 's', long = "size")]
-    size: Option<String>,
-    
+    /// Number of bytes to send
+    #[clap(short = 's', long = "size")]
+    size: Option<u16>,
+
+    /// Interval between sending packets (in seconds)
+    #[clap(short = 'i', long = "interval")]
+    interval: Option<f64>,
+
+    /// Timeout before giving up (in seconds)
+    #[clap(short = 'W', long = "timeout")]
+    timeout: Option<f64>,
+
     /// Time to live
-    #[arg(short = 't', long = "ttl")]
-    ttl: Option<String>,
+    #[clap(short, long)]
+    ttl: Option<u8>,
+
+    /// Wait time between pings (in ms)
+    #[clap(short = 'p', long = "pattern")]
+    pattern: Option<String>,
+
+    /// Wait time between pings (in ms)
+    #[clap(short = 'q', long = "quiet")]
+    quiet: bool,
+
+    /// Verbose output
+    #[clap(short = 'v', long = "verbose")]
+    verbose: bool,
+
+    /// Audible ping
+    #[clap(short = 'a', long = "audible")]
+    audible: bool,
+
+    /// Bypass route using socket options
+    #[clap(short = 'b')]
+    bypass_route: bool,
+
+    /// Numeric output only (no DNS resolution)
+    #[clap(short = 'n', long = "numeric")]
+    numeric: bool,
+
+    /// Timestamp display
+    #[clap(short = 'D', long = "timestamp")]
+    timestamp: bool,
+
+    /// Flood ping
+    #[clap(short = 'f', long = "flood")]
+    flood: bool,
 }
 
-#[derive(Parser)]
-#[command(version, about = "Like ping, but with ASCII art")]
 #[cfg(target_os = "windows")]
+#[derive(Parser, Debug)]
+#[clap(author, version, about)]
 struct Args {
-    /// The target host to ping
-    host: String,
+    /// Target host to ping
+    destination: String,
 
-    /// Number of packets to send 
-    #[arg(short = 'n', long = "count")]
-    count: Option<String>,
+    /// Number of packets to send
+    #[clap(short = 'n', long = "count")]
+    count: Option<u16>,
 
-    /// Interval between sending packets in seconds
-    #[arg(short = 'w', long = "interval")]
-    interval: Option<String>,
-    
-    /// Send buffer size in bytes
-    #[arg(short = 'l', long = "size")]
-    size: Option<String>,
-    
+    /// Number of bytes to send
+    #[clap(short = 'l', long = "size")]
+    size: Option<u16>,
+
+    /// Interval between sending packets (in seconds)
+    #[clap(short = 'i', long = "interval")]
+    interval: Option<f64>,
+
+    /// Timeout before giving up (in seconds)
+    #[clap(short = 'w', long = "timeout")]
+    timeout: Option<f64>,
+
     /// Time to live
-    #[arg(short = 'i', long = "ttl")]
-    ttl: Option<String>,
-    
+    #[clap(short = 'i', long = "ttl")]
+    ttl: Option<u8>,
+
+    /// Record route
+    #[clap(short = 'r', long = "record-route")]
+    record_route: bool,
+
+    /// Timestamp route
+    #[clap(short = 's', long = "timestamp")]
+    timestamp: bool,
+
     /// Resolve addresses to hostnames
-    #[arg(short = 'a', long = "resolve")]
+    #[clap(short = 'a', long = "resolve")]
     resolve: bool,
 }
 
-
-fn load_ascii_art() -> String {
-    // ANSI color codes
-    let pink = "\x1b[95m";  // Bright magenta (pink)
-    let reset = "\x1b[0m";  // Reset to default color
-
-    let art = include_str!("../ascii-art.txt");
-    
-    format!("{}{}{}", pink, art, reset)
-
+// Configuration for the ping operation
+struct PingConfig {
+    destination: String,
+    count: Option<u16>,
+    packet_size: usize,
+    interval_ms: u64,
+    timeout_ms: u64,
+    ttl: u8,
+    quiet: bool,
 }
 
-fn main() -> io::Result<()> {
-    // Parse command-line arguments
+// Load ASCII art from file
+fn load_ascii_art() -> String {
+    include_str!("../ascii-art.txt").to_string()
+}
+
+// Parse command line arguments into a unified PingConfig
+fn parse_args() -> Result<PingConfig> {
     let args = Args::parse();
-
-    // Always display ASCII art
-    println!("{}\n", load_ascii_art());
-
-    // Construct ping command
-    let mut cmd = Command::new("ping");
-
+    
+    // Resolve hostname to IP address
+    let host_addresses = lookup_host(&args.destination)
+        .with_context(|| format!("Failed to resolve hostname: {}", args.destination))?;
+    
+    // First try to find an IPv4 address, then fall back to any IP address
+    host_addresses.iter()
+        .find(|ip| ip.is_ipv4())
+        .copied()
+        .or_else(|| host_addresses.get(0).copied())
+        .ok_or_else(|| anyhow!("No IP addresses found for host: {}", args.destination))?;
+    
+    // Get configuration values, using defaults if not specified
+    #[cfg(target_os = "linux")]
+    let (count, packet_size, interval_ms, timeout_ms, ttl, quiet) = (
+        args.count,
+        args.size.map(|s| s as usize).unwrap_or(56),
+        (args.interval.unwrap_or(1.0) * 1000.0) as u64,
+        (args.timeout.unwrap_or(4.0) * 1000.0) as u64,
+        args.ttl.unwrap_or(64),
+        args.quiet,
+    );
+    
     #[cfg(target_os = "windows")]
-    {
-        // Windows ping syntax
-        
-        // Add count parameter (-n for Windows)
-        if let Some(count) = &args.count {
-            cmd.arg("-n").arg(count);
-        }
-        
-        // Add interval parameter (-w for Windows, value in milliseconds)
-        if let Some(interval) = &args.interval {
-            // Convert seconds to milliseconds for Windows
-            if let Ok(secs) = interval.parse::<f64>() {
-                let ms = (secs * 1000.0).round().to_string();
-                cmd.arg("-w").arg(ms);
-            } else {
-                cmd.arg("-w").arg(interval);
-            }
-        }
-        
-        // Add buffer size parameter (-l for Windows)
-        if let Some(size) = &args.size {
-            cmd.arg("-l").arg(size);
-        }
-        
-        // Add TTL parameter (-i for Windows)
-        if let Some(ttl) = &args.ttl {
-            cmd.arg("-i").arg(ttl);
-        }
-        
-        // Add resolve addresses flag (-a for Windows)
-        if args.resolve {
-            cmd.arg("-a");
-        }
-        
-        // Add target host (last parameter for ping)
-        cmd.arg(&args.host);
-    }
+    let (count, packet_size, interval_ms, timeout_ms, ttl, quiet) = (
+        args.count,
+        args.size.map(|s| s as usize).unwrap_or(32),
+        (args.interval.unwrap_or(1.0) * 1000.0) as u64,
+        (args.timeout.unwrap_or(4.0) * 1000.0) as u64,
+        args.ttl.unwrap_or(128),
+        false,
+    );
+    
+    Ok(PingConfig {
+        destination: args.destination,
+        count,
+        packet_size,
+        interval_ms,
+        timeout_ms,
+        ttl,
+        quiet,
+    })
+}
 
+fn main() -> Result<()> {
+    // Parse command-line arguments into PingConfig
+    let config = parse_args()?;
+    
+    // Print ASCII art
+    if !config.quiet {
+        println!("{}", load_ascii_art());
+    }
+    
+    // Generate the command based on the platform and arguments
+    #[cfg(target_os = "linux")]
+    let mut cmd = Command::new("ping");
     #[cfg(target_os = "linux")]
     {
-        // Linux ping syntax
-        
-        // Add the target host first
-        cmd.arg(&args.host);
-        
-        // Add optional arguments
-        if let Some(count) = &args.count {
-            cmd.arg("-c").arg(count);
+        cmd.arg("-c").arg(config.count.map(|c| c.to_string()).unwrap_or_else(|| "5".to_string()));
+        cmd.arg("-s").arg(config.packet_size.to_string());
+        cmd.arg("-i").arg((config.interval_ms as f64 / 1000.0).to_string());
+        cmd.arg("-W").arg((config.timeout_ms as f64 / 1000.0).to_string());
+        cmd.arg("-t").arg(config.ttl.to_string());
+        if config.quiet {
+            cmd.arg("-q");
         }
-        
-        if let Some(interval) = &args.interval {
-            cmd.arg("-i").arg(interval);
-        }
-        
-        if let Some(timeout) = &args.timeout {
-            cmd.arg("-W").arg(timeout);
-        }
-        
-        if let Some(size) = &args.size {
-            cmd.arg("-s").arg(size);
-        }
-        
-        if let Some(ttl) = &args.ttl {
-            cmd.arg("-t").arg(ttl);
-        }
+        cmd.arg(&config.destination);
     }
-
-    // Configure stdout and stderr
-    cmd.stdout(Stdio::piped());
-    cmd.stderr(Stdio::piped());
+    
+    #[cfg(target_os = "windows")]
+    let mut cmd = Command::new("ping");
+    #[cfg(target_os = "windows")]
+    {
+        cmd.arg("-n").arg(config.count.map(|c| c.to_string()).unwrap_or_else(|| "5".to_string()));
+        cmd.arg("-l").arg(config.packet_size.to_string());
+        cmd.arg("-w").arg(config.timeout_ms.to_string());
+        cmd.arg("-i").arg(config.ttl.to_string());
+        cmd.arg(&config.destination);
+    }
     
     // Execute the ping command
-    let mut child = cmd.spawn()?;
+    let status = cmd.status()
+        .context("Failed to execute ping command")?;
     
-    // Read and display stdout in real-time
-    if let Some(stdout) = child.stdout.take() {
-        let reader = BufReader::new(stdout);
-        for line in reader.lines() {
-            match line {
-                Ok(line) => println!("{}", line),
-                Err(e) => eprintln!("Error reading ping output: {}", e),
-            }
-        }
+    if !status.success() {
+        return Err(anyhow!("Ping command failed with exit code: {:?}", status.code()));
     }
     
-    // Read stderr if needed
-    if let Some(mut stderr) = child.stderr.take() {
-        let mut err_output = String::new();
-        if stderr.read_to_string(&mut err_output).is_ok() && !err_output.is_empty() {
-            eprintln!("{}", err_output);
-        }
-    }
-    
-    // Wait for the process to complete
-    let status = child.wait()?;
-    
-    // Exit with the same status code as ping
-    std::process::exit(status.code().unwrap_or(1));
+    Ok(())
 }
