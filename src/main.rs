@@ -1,57 +1,73 @@
-use std::fs;
 use std::process::{Command, Stdio};
 use std::io::{self, Read, BufRead, BufReader};
-use std::env;
 use clap::Parser;
 
 #[derive(Parser)]
 #[command(version, about = "Like ping, but with ASCII art")]
+#[cfg(target_os = "linux")]
 struct Args {
     /// The target host to ping
     host: String,
 
-    /// Number of packets to send (like ping's -c option)
+    /// Number of packets to send
     #[arg(short = 'c', long = "count")]
     count: Option<String>,
 
-    /// Interval between sending packets in seconds (like ping's -i option)
+    /// Interval between sending packets in seconds
     #[arg(short = 'i', long = "interval")]
     interval: Option<String>,
-
-    /// Wait timeout in seconds (like ping's -W option)
+    
+    /// Wait timeout in seconds
     #[arg(short = 'W', long = "timeout")]
     timeout: Option<String>,
+    
+    /// Size of the packet to send in bytes
+    #[arg(short = 's', long = "size")]
+    size: Option<String>,
+    
+    /// Time to live
+    #[arg(short = 't', long = "ttl")]
+    ttl: Option<String>,
 }
+
+#[derive(Parser)]
+#[command(version, about = "Like ping, but with ASCII art")]
+#[cfg(target_os = "windows")]
+struct Args {
+    /// The target host to ping
+    host: String,
+
+    /// Number of packets to send 
+    #[arg(short = 'n', long = "count")]
+    count: Option<String>,
+
+    /// Interval between sending packets in seconds
+    #[arg(short = 'w', long = "interval")]
+    interval: Option<String>,
+    
+    /// Send buffer size in bytes
+    #[arg(short = 'l', long = "size")]
+    size: Option<String>,
+    
+    /// Time to live
+    #[arg(short = 'i', long = "ttl")]
+    ttl: Option<String>,
+    
+    /// Resolve addresses to hostnames
+    #[arg(short = 'a', long = "resolve")]
+    resolve: bool,
+}
+
 
 fn load_ascii_art() -> String {
     // ANSI color codes
     let pink = "\x1b[95m";  // Bright magenta (pink)
     let reset = "\x1b[0m";  // Reset to default color
+
+    let art = include_str!("../ascii-art.txt");
     
-    // Try different possible locations for the ASCII art file
-    let possible_paths = [
-        "ascii-art.txt",                                   // Current directory
-        "../ascii-art.txt",                                // Parent directory
-        &format!("{}/ascii-art.txt", env!("CARGO_MANIFEST_DIR")), // Cargo manifest directory
-    ];
+    format!("{}{}{}", pink, art, reset)
 
-    for path in possible_paths {
-        if let Ok(art) = fs::read_to_string(path) {
-            // Return the art with pink color
-            return format!("{}{}{}", pink, art, reset);
-        }
-    }
-
-    // If we couldn't find the file, return a simple fallback ASCII art
-    format!("{}{}{}",
-        pink,
-        r#"
-    *******************
-    *  B I N G P I N G *
-    *******************
-    "#,
-        reset
-    )
 }
 
 fn main() -> io::Result<()> {
@@ -63,23 +79,75 @@ fn main() -> io::Result<()> {
 
     // Construct ping command
     let mut cmd = Command::new("ping");
-    
-    // Add the target host
-    cmd.arg(&args.host);
-    
-    // Add optional arguments if provided
-    if let Some(count) = &args.count {
-        cmd.arg("-c").arg(count);
+
+    #[cfg(target_os = "windows")]
+    {
+        // Windows ping syntax
+        
+        // Add count parameter (-n for Windows)
+        if let Some(count) = &args.count {
+            cmd.arg("-n").arg(count);
+        }
+        
+        // Add interval parameter (-w for Windows, value in milliseconds)
+        if let Some(interval) = &args.interval {
+            // Convert seconds to milliseconds for Windows
+            if let Ok(secs) = interval.parse::<f64>() {
+                let ms = (secs * 1000.0).round().to_string();
+                cmd.arg("-w").arg(ms);
+            } else {
+                cmd.arg("-w").arg(interval);
+            }
+        }
+        
+        // Add buffer size parameter (-l for Windows)
+        if let Some(size) = &args.size {
+            cmd.arg("-l").arg(size);
+        }
+        
+        // Add TTL parameter (-i for Windows)
+        if let Some(ttl) = &args.ttl {
+            cmd.arg("-i").arg(ttl);
+        }
+        
+        // Add resolve addresses flag (-a for Windows)
+        if args.resolve {
+            cmd.arg("-a");
+        }
+        
+        // Add target host (last parameter for ping)
+        cmd.arg(&args.host);
     }
-    
-    if let Some(interval) = &args.interval {
-        cmd.arg("-i").arg(interval);
+
+    #[cfg(target_os = "linux")]
+    {
+        // Linux ping syntax
+        
+        // Add the target host first
+        cmd.arg(&args.host);
+        
+        // Add optional arguments
+        if let Some(count) = &args.count {
+            cmd.arg("-c").arg(count);
+        }
+        
+        if let Some(interval) = &args.interval {
+            cmd.arg("-i").arg(interval);
+        }
+        
+        if let Some(timeout) = &args.timeout {
+            cmd.arg("-W").arg(timeout);
+        }
+        
+        if let Some(size) = &args.size {
+            cmd.arg("-s").arg(size);
+        }
+        
+        if let Some(ttl) = &args.ttl {
+            cmd.arg("-t").arg(ttl);
+        }
     }
-    
-    if let Some(timeout) = &args.timeout {
-        cmd.arg("-W").arg(timeout);
-    }
-    
+
     // Configure stdout and stderr
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());
