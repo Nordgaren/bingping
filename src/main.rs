@@ -187,7 +187,7 @@ impl PingStats {
     }
 }
 
-// Create an ICMP echo request packet
+// Create an ICMP echo request packet with ASCII art data
 fn create_icmp_packet(buffer: &mut [u8], sequence: u16, identifier: u16, size: usize) -> usize {
     // Clear the buffer first
     buffer.iter_mut().for_each(|b| *b = 0);
@@ -211,9 +211,20 @@ fn create_icmp_packet(buffer: &mut [u8], sequence: u16, identifier: u16, size: u
         echo_request_buffer[2] = (sequence >> 8) as u8;
         echo_request_buffer[3] = (sequence & 0xFF) as u8;
         
-        // Fill the rest of the payload with pattern data
-        for i in 4..echo_request_buffer.len() {
-            echo_request_buffer[i] = (i % 256) as u8;
+        // Get ASCII art and use it as payload
+        let ascii_art = load_ascii_art();
+        let ascii_bytes = ascii_art.as_bytes();
+        
+        // Calculate how much of the ASCII art we can fit
+        let max_payload_size = echo_request_buffer.len() - 4; // Reserve 4 bytes for ID and seq
+        let art_size = ascii_bytes.len().min(max_payload_size);
+        
+        // Copy as much of the ASCII art as will fit in the payload
+        echo_request_buffer[4..4+art_size].copy_from_slice(&ascii_bytes[0..art_size]);
+        
+        // Fill any remaining space with a pattern
+        for i in (4 + art_size)..echo_request_buffer.len() {
+            echo_request_buffer[i] = b'#';
         }
     }
     
@@ -221,7 +232,7 @@ fn create_icmp_packet(buffer: &mut [u8], sequence: u16, identifier: u16, size: u
     let checksum = pnet::packet::icmp::checksum(&icmp_packet.to_immutable());
     icmp_packet.set_checksum(checksum);
     
-    println!("Created ICMP Echo Request: ID={}, Seq={}, Checksum={:x}", 
+    println!("Created ICMP Echo Request with ASCII art: ID={}, Seq={}, Checksum={:x}", 
              identifier, sequence, checksum);
     
     size
@@ -246,7 +257,7 @@ fn parse_args() -> Result<PingConfig> {
     #[cfg(target_os = "linux")]
     let (count, packet_size, interval_ms, timeout_ms, ttl, quiet) = (
         args.count,
-        args.size.map(|s| s as usize).unwrap_or(56),
+        args.size.map(|s| s as usize).unwrap_or(4096),
         (args.interval.unwrap_or(1.0) * 1000.0) as u64,
         (args.timeout.unwrap_or(4.0) * 1000.0) as u64,
         args.ttl.unwrap_or(64),
@@ -256,7 +267,7 @@ fn parse_args() -> Result<PingConfig> {
     #[cfg(target_os = "windows")]
     let (count, packet_size, interval_ms, timeout_ms, ttl, quiet) = (
         args.count,
-        args.size.map(|s| s as usize).unwrap_or(32),
+        args.size.map(|s| s as usize).unwrap_or(4096),
         (args.interval.unwrap_or(1.0) * 1000.0) as u64,
         (args.timeout.unwrap_or(4.0) * 1000.0) as u64,
         args.ttl.unwrap_or(128),
@@ -416,6 +427,27 @@ fn ping_with_raw_sockets(config: &PingConfig) -> Result<()> {
                                             println!("{} bytes from {}: icmp_seq={} ttl={} time={:.1} ms",
                                                     packet_size, addr, reply_seq, ttl, rtt);
                                             
+                                            // Check if we received ASCII art in the reply
+                                            if payload.len() > 4 {
+                                                // Try to extract ASCII art from the payload
+                                                // Start after the ID and sequence bytes
+                                                let art_data = &payload[4..];
+                                                
+                                                // Convert to string, ignoring non-printable characters
+                                                let art_string = art_data.iter()
+                                                    .filter(|&&b| b.is_ascii() && (b.is_ascii_graphic() || b == b' ' || b == b'\n'))
+                                                    .map(|&b| b as char)
+                                                    .collect::<String>();
+                                                
+                                                // If we got something back (some servers just send zeros)
+                                                if !art_string.trim().is_empty() {
+                                                    println!("Received ASCII art in reply:");
+                                                    // Pink color: ANSI escape code \x1b[38;5;213m (bright pink)
+                                                    // Reset color: \x1b[0m
+                                                    println!("\x1b[38;5;213m{}\x1b[0m", art_string);
+                                                }
+                                            }
+                                            
                                             // Update statistics
                                             let mut stats = stats_clone.lock().unwrap();
                                             stats.update(rtt);
@@ -448,7 +480,7 @@ fn ping_with_raw_sockets(config: &PingConfig) -> Result<()> {
     // Set up timer for sending packets
     let ticker = tick(Duration::from_millis(config.interval_ms));
     
-    // Prepare ICMP packet buffer
+    // Prepare ICMP packet buffer with enough space for the data
     let mut packet_buffer = vec![0u8; packet_size + 8]; // 8 bytes for ICMP header
     
     // Main loop: send packets and print statistics
@@ -537,7 +569,9 @@ fn main() -> Result<()> {
     
     // Print ASCII art
     if !config.quiet {
-        println!("{}", load_ascii_art());
+        // Pink color: ANSI escape code \x1b[38;5;213m (bright pink)
+        // Reset color: \x1b[0m
+        println!("\x1b[38;5;213m{}\x1b[0m", load_ascii_art());
     }
     
     // Try to use raw sockets for custom ping implementation
