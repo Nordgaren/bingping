@@ -51,15 +51,18 @@ I'll review it later, but for now, the funnies.
        ...........................................................................                  
 </pre>
 
-BingPing is a wrapper around the standard ping utility that adds ASCII art to the output.
+BingPing is a custom ICMP ping implementation with ASCII art display.
 
 ## Features
 
-- Works just like the regular ping command
-- Displays fun ASCII art in pink color before ping output
-- Maintains all standard ping functionality
-- Passes through exit codes from the original ping command
+- Displays Bingus ASCII art before ping output and in replies
+- Supports color options for ASCII art:
+  - Pink color (default)
+  - Rainbow color (with the `--rainbow` flag)
+- Custom raw socket ICMP implementation
 - Cross-platform support for both Linux and Windows
+- Standard ping functionality (count, size, interval, etc.)
+- Includes timeout handling and statistics
 
 ## Installation
 
@@ -85,10 +88,16 @@ The Windows executable will be in `target/x86_64-pc-windows-gnu/release/bingping
 # Basic usage
 bingping example.com
 
+# With rainbow colors
+bingping --rainbow example.com
+
 # Linux specific options
 # ---------------------
 # Specify count (number of packets)
 bingping -c 5 example.com
+
+# With rainbow colors and specific count
+bingping -r -c 5 example.com
 
 # Specify interval between packets in seconds
 bingping -i 2 example.com
@@ -107,6 +116,9 @@ bingping -t 64 example.com
 # Specify count (number of packets)
 bingping -n 5 example.com
 
+# With rainbow colors (Windows only has long flag option)
+bingping --rainbow -n 5 example.com
+
 # Specify wait timeout in milliseconds
 bingping -w 1000 example.com
 
@@ -123,9 +135,8 @@ bingping -a example.com
 ## Requirements
 
 - Rust 1.54 or later
-- The standard `ping` utility must be installed and in your PATH
+- For raw socket functionality: elevated permissions (sudo/administrator)
 - For cross-compiling to Windows: MinGW toolchain
 
 ## License
 
-MIT

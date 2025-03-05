@@ -77,6 +77,10 @@ struct Args {
     /// Flood ping
     #[clap(short = 'f', long = "flood")]
     flood: bool,
+    
+    /// Use rainbow colors for ASCII art
+    #[clap(short = 'r', long = "rainbow")]
+    rainbow: bool,
 }
 
 #[cfg(target_os = "windows")]
@@ -117,6 +121,10 @@ struct Args {
     /// Resolve addresses to hostnames
     #[clap(short = 'a', long = "resolve")]
     resolve: bool,
+    
+    /// Use rainbow colors for ASCII art
+    #[clap(long = "rainbow")]
+    rainbow: bool,
 }
 
 // Configuration for the ping operation
@@ -129,6 +137,7 @@ struct PingConfig {
     timeout_ms: u64,
     ttl: u8,
     quiet: bool,
+    rainbow: bool,
 }
 
 // Load ASCII art from file
@@ -255,23 +264,25 @@ fn parse_args() -> Result<PingConfig> {
     
     // Get configuration values, using defaults if not specified
     #[cfg(target_os = "linux")]
-    let (count, packet_size, interval_ms, timeout_ms, ttl, quiet) = (
+    let (count, packet_size, interval_ms, timeout_ms, ttl, quiet, rainbow) = (
         args.count,
         args.size.map(|s| s as usize).unwrap_or(4096),
         (args.interval.unwrap_or(1.0) * 1000.0) as u64,
         (args.timeout.unwrap_or(4.0) * 1000.0) as u64,
         args.ttl.unwrap_or(64),
         args.quiet,
+        args.rainbow,
     );
     
     #[cfg(target_os = "windows")]
-    let (count, packet_size, interval_ms, timeout_ms, ttl, quiet) = (
+    let (count, packet_size, interval_ms, timeout_ms, ttl, quiet, rainbow) = (
         args.count,
         args.size.map(|s| s as usize).unwrap_or(4096),
         (args.interval.unwrap_or(1.0) * 1000.0) as u64,
         (args.timeout.unwrap_or(4.0) * 1000.0) as u64,
         args.ttl.unwrap_or(128),
         false,
+        args.rainbow,
     );
     
     Ok(PingConfig {
@@ -283,6 +294,7 @@ fn parse_args() -> Result<PingConfig> {
         timeout_ms,
         ttl,
         quiet,
+        rainbow,
     })
 }
 
@@ -376,6 +388,9 @@ fn ping_with_raw_sockets(config: &PingConfig) -> Result<()> {
     let send_times = Arc::new(Mutex::new(HashMap::new()));
     let send_times_clone = Arc::clone(&send_times);
     
+    // Pass a copy of the config to the receiver thread
+    let rainbow = config.rainbow;
+    
     // Print header
     println!("PING {} ({}) {} bytes of data.", 
              destination, ip_addr, packet_size);
@@ -442,9 +457,13 @@ fn ping_with_raw_sockets(config: &PingConfig) -> Result<()> {
                                                 // If we got something back (some servers just send zeros)
                                                 if !art_string.trim().is_empty() {
                                                     println!("Received ASCII art in reply:");
-                                                    // Pink color: ANSI escape code \x1b[38;5;213m (bright pink)
-                                                    // Reset color: \x1b[0m
-                                                    println!("\x1b[38;5;213m{}\x1b[0m", art_string);
+                                                    if rainbow {
+                                                        // Rainbow colors
+                                                        println!("{}", rainbow_text(&art_string));
+                                                    } else {
+                                                        // Pink color
+                                                        println!("\x1b[38;5;213m{}\x1b[0m", art_string);
+                                                    }
                                                 }
                                             }
                                             
@@ -563,15 +582,52 @@ fn ping_with_raw_sockets(config: &PingConfig) -> Result<()> {
     Ok(())
 }
 
+// Helper function to format text with rainbow colors
+fn rainbow_text(text: &str) -> String {
+    let colors = [
+        "\x1b[38;5;196m", // Red
+        "\x1b[38;5;202m", // Orange
+        "\x1b[38;5;226m", // Yellow
+        "\x1b[38;5;46m",  // Green
+        "\x1b[38;5;21m",  // Blue
+        "\x1b[38;5;93m",  // Indigo
+        "\x1b[38;5;163m", // Violet
+    ];
+    
+    let reset = "\x1b[0m";
+    let mut result = String::new();
+    let mut lines = text.lines().peekable();
+    
+    while let Some(line) = lines.next() {
+        // Get the color index based on line number
+        let color_idx = (result.lines().count() / 2) % colors.len();
+        result.push_str(colors[color_idx]);
+        result.push_str(line);
+        result.push_str(reset);
+        
+        // Add newline if this isn't the last line
+        if lines.peek().is_some() {
+            result.push('\n');
+        }
+    }
+    
+    result
+}
+
 fn main() -> Result<()> {
     // Parse command-line arguments into PingConfig
     let config = parse_args()?;
     
     // Print ASCII art
     if !config.quiet {
-        // Pink color: ANSI escape code \x1b[38;5;213m (bright pink)
-        // Reset color: \x1b[0m
-        println!("\x1b[38;5;213m{}\x1b[0m", load_ascii_art());
+        let ascii_art = load_ascii_art();
+        if config.rainbow {
+            // Use rainbow colors
+            println!("{}", rainbow_text(&ascii_art));
+        } else {
+            // Use pink color
+            println!("\x1b[38;5;213m{}\x1b[0m", ascii_art);
+        }
     }
     
     // Try to use raw sockets for custom ping implementation
