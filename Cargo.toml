@@ -8,6 +8,7 @@ clap = { version = "4.5.1", features = ["derive"] }
 socket2 = "0.5.6"
 pnet = "0.34.0"
 pnet_packet = "0.34.0"
+pnet_transport = "0.34.0"
 dns-lookup = "2.0.4"
 rand = "0.8.5"
 chrono = "0.4.34"
