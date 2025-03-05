@@ -31,9 +31,6 @@ bingping -i 2 example.com
 
 # Specify timeout (like ping -W)
 bingping -W 5 example.com
-
-# Disable ASCII art
-bingping --no-art example.com
 ```
 
 ## Requirements

@@ -21,10 +21,6 @@ struct Args {
     /// Wait timeout in seconds (like ping's -W option)
     #[arg(short = 'W', long = "timeout")]
     timeout: Option<String>,
-
-    /// Don't show the ASCII art
-    #[arg(long = "no-art")]
-    no_art: bool,
 }
 
 fn load_ascii_art() -> String {
@@ -62,10 +58,8 @@ fn main() -> io::Result<()> {
     // Parse command-line arguments
     let args = Args::parse();
 
-    // Display ASCII art unless --no-art is specified
-    if !args.no_art {
-        println!("{}\n", load_ascii_art());
-    }
+    // Always display ASCII art
+    println!("{}\n", load_ascii_art());
 
     // Construct ping command
     let mut cmd = Command::new("ping");
